@@ -12,10 +12,12 @@ import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
 import { WebrtcProvider } from 'y-webrtc';
 import * as Y from 'yjs';
 
+type AIMode = 'grammar' | 'shorten' | 'lengthen' | 'rewrite' | 'table';
+
 type Props = {
   roomId: string;
   onSelectionText: (text: string) => void;
-  onAIAction: (mode: string, selectedText: string, instruction?: string) => void;
+  onAIAction: (mode: AIMode, selectedText: string, instruction?: string) => void;
 };
 
 export type EditorHandle = {
@@ -39,7 +41,6 @@ const Editor = forwardRef<EditorHandle, Props>(({ roomId, onSelectionText, onAIA
 
   // Create/destroy Y.Doc + Provider ONCE per roomId
   useEffect(() => {
-    // hard cleanup if hot-reloaded
     providerRef.current?.destroy();
     ydocRef.current?.destroy();
     providerRef.current = null;
@@ -55,7 +56,6 @@ const Editor = forwardRef<EditorHandle, Props>(({ roomId, onSelectionText, onAIA
     setReady(true);
 
     return () => {
-      // clean shutdown
       try { providerRef.current?.destroy(); } catch {}
       try { ydocRef.current?.destroy(); } catch {}
       providerRef.current = null;
@@ -64,47 +64,38 @@ const Editor = forwardRef<EditorHandle, Props>(({ roomId, onSelectionText, onAIA
     };
   }, [roomId]);
 
-  // Build the editor only AFTER provider/doc are ready
-  // Build the editor. Always pass an options object; add collab bits only when ready.
-const editor = useEditor(
-  {
-    extensions: [
-      StarterKit,
-      Placeholder.configure({ placeholder: 'Start typing with your teammate...' }),
-      CharacterCount.configure({ limit: 20000 }),
-
-      // Add collaboration only when Y.Doc / provider are ready
-      ...(ydocRef.current
-        ? [Collaboration.configure({ document: ydocRef.current })]
-        : []),
-
-      ...(providerRef.current
-        ? [CollaborationCursor.configure({
-            provider: providerRef.current,
-            user: { name: user.name, color: user.color },
-          })]
-        : []),
-    ],
-    content: '',
-    editorProps: {
-      attributes: {
-        class:
-          'prose max-w-none min-h-[calc(100vh-56px)] p-6 focus:outline-none',
+  // Build the editor AFTER provider/doc are ready
+  const editor = useEditor(
+    {
+      extensions: [
+        StarterKit,
+        Placeholder.configure({ placeholder: 'Start typing with your teammate...' }),
+        CharacterCount.configure({ limit: 20000 }),
+        ...(ydocRef.current ? [Collaboration.configure({ document: ydocRef.current })] : []),
+        ...(providerRef.current
+          ? [CollaborationCursor.configure({
+              provider: providerRef.current,
+              user: { name: user.name, color: user.color },
+            })]
+          : []),
+      ],
+      content: '',
+      editorProps: {
+        attributes: {
+          class: 'prose max-w-none min-h-[calc(100vh-56px)] p-6 focus:outline-none',
+        },
+      },
+      onSelectionUpdate({ editor }) {
+        const text = editor.state.doc.textBetween(
+          editor.state.selection.from,
+          editor.state.selection.to,
+          ' ',
+        );
+        onSelectionText(text);
       },
     },
-    onSelectionUpdate({ editor }) {
-      const text = editor.state.doc.textBetween(
-        editor.state.selection.from,
-        editor.state.selection.to,
-        ' ',
-      );
-      onSelectionText(text);
-    },
-  },
-  // Recreate editor when room or readiness changes
-  [roomId, ready],
-);
-
+    [roomId, ready],
+  );
 
   useImperativeHandle(ref, () => ({
     insertAtCursor(text: string) {
@@ -120,20 +111,64 @@ const editor = useEditor(
 
   if (!editor) return <div className="flex-1" />;
 
-  const selectionText = () =>
-    editor.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to, ' ');
+  // --- helpers: read selection & call AI safely ---
+  const getSelectedText = () => {
+    const { from, to } = editor.state.selection;
+    return editor.state.doc.textBetween(from, to, ' ');
+  };
+
+  const handleAiClick = (mode: AIMode) => {
+    const sel = getSelectedText();
+    if (!sel || !sel.trim()) {
+      alert('Please select some text first.');
+      return;
+    }
+    onAIAction(mode, sel);
+  };
 
   return (
     <div className="flex-1 relative bg-white">
       <BubbleMenu editor={editor} tippyOptions={{ duration: 150 }}>
         <div className="flex items-center gap-1 bg-black/90 text-white rounded-xl px-2 py-1 text-xs">
-          <button className="px-2 py-1 hover:bg-white/10 rounded" onClick={() => onAIAction('grammar', selectionText())}>Fix</button>
-          <button className="px-2 py-1 hover:bg-white/10 rounded" onClick={() => onAIAction('shorten', selectionText())}>Shorten</button>
-          <button className="px-2 py-1 hover:bg-white/10 rounded" onClick={() => onAIAction('lengthen', selectionText())}>Lengthen</button>
-          <button className="px-2 py-1 hover:bg-white/10 rounded" onClick={() => onAIAction('rewrite', selectionText())}>Rewrite</button>
-          <button className="px-2 py-1 hover:bg-white/10 rounded" onClick={() => onAIAction('table', selectionText())}>To Table</button>
+          {/* prevent losing selection on click */}
+          <button
+            className="px-2 py-1 hover:bg-white/10 rounded"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => handleAiClick('grammar')}
+          >
+            Fix
+          </button>
+          <button
+            className="px-2 py-1 hover:bg-white/10 rounded"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => handleAiClick('shorten')}
+          >
+            Shorten
+          </button>
+          <button
+            className="px-2 py-1 hover:bg-white/10 rounded"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => handleAiClick('lengthen')}
+          >
+            Lengthen
+          </button>
+          <button
+            className="px-2 py-1 hover:bg-white/10 rounded"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => handleAiClick('rewrite')}
+          >
+            Rewrite
+          </button>
+          <button
+            className="px-2 py-1 hover:bg-white/10 rounded"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => handleAiClick('table')}
+          >
+            To Table
+          </button>
         </div>
       </BubbleMenu>
+
       <EditorContent editor={editor} />
     </div>
   );
